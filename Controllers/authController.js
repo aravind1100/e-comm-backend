@@ -1,5 +1,4 @@
 import User from "../Models/user.schema.js";
-import { sendPasswordResetEmail } from "../Utils/email.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -47,19 +46,7 @@ const loginSchema = Joi.object({
   })
 });
 
-const forgotPasswordSchema = Joi.object({
-  email: Joi.string().email().required().messages({
-    'string.email': 'Please enter a valid email address',
-    'any.required': 'Email is required'
-  })
-});
 
-const resetPasswordSchema = Joi.object({
-  password: Joi.string().min(6).required().messages({
-    'any.required': 'Password is required',
-    'string.min': 'Password must be at least 6 characters'
-  })
-});
 
 // Generate JWT token
 const generateToken = (userId) => {
@@ -180,98 +167,4 @@ export const login = async (req, res) => {
   }
 };
 
-// POST /api/auth/forgot-password
-export const forgotPassword = async (req, res) => {
-  try {
-    // Validate request body
-    const { error, value } = forgotPasswordSchema.validate(req.body, { abortEarly: false });
-    
-    if (error) {
-      const errors = error.details.map(detail => detail.message);
-      return res.status(400).json({ message: "Validation error", errors });
-    }
-    
-    const { email } = value;
-    
-    const user = await User.findOne({ email });
-    
-    // Always return success to prevent email enumeration
-    if (!user) {
-      return res.status(200).json({ message: "Password reset email sent if account exists" });
-    }
-    
-    // Generate secure reset token (unhashed)
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    
-    // Create hashed token for database storage
-    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
-    
-    // Set token with expiration (10 minutes)
-    user.resetPasswordToken = hashedToken;
-    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
-    
-    await user.save();
-    
-    try {
-      await sendPasswordResetEmail(user.email, resetToken);
-    } catch (emailError) {
-      console.error("Email sending failed:", emailError);
-      // Don't fail the request, just log the error
-    }
-    
-    res.status(200).json({ message: "Password reset email sent" });
-  } catch (error) {
-    console.error("Forgot password error:", error);
-    res.status(500).json({
-      message: "Error processing password reset request",
-      error: error.message,
-    });
-  }
-};
-
-// POST /api/auth/reset-password/:token
-export const resetPassword = async (req, res) => {
-  try {
-    // Validate request body
-    const { error, value } = resetPasswordSchema.validate(req.body, { abortEarly: false });
-    
-    if (error) {
-      const errors = error.details.map(detail => detail.message);
-      return res.status(400).json({ message: "Validation error", errors });
-    }
-    
-    const { token } = req.params;
-    const { password } = value;
-    
-    // Hash token to match database value
-    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
-    
-    // Find user by token and check expiration
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpire: { $gt: Date.now() }
-    });
-    
-    if (!user) {
-      return res.status(400).json({ message: "Invalid or expired token" });
-    }
-    
-    // Update password
-    const hashedPassword = await bcrypt.hash(password, 10);
-    user.password = hashedPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
-    user.passwordChangedAt = Date.now();
-    
-    await user.save();
-    
-    res.status(200).json({ message: "Password has been reset successfully" });
-  } catch (error) {
-    console.error("Reset password error:", error);
-    res.status(500).json({
-      message: "Error resetting password",
-      error: error.message,
-    });
-  }
-};
 
